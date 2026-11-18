@@ -58,6 +58,27 @@ Regression tests:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
+## v0.4 — Generic static Layout Explorer
+
+**Import → Inspect existing Python UI... (Ctrl+I)** now offers four tabs:
+
+- **Visual Designer:** retained ImageScraper-specific splitter preview and size-to-source edit.
+- **Layout Explorer:** general static approximation for supported Qt layout structure. Pick a class method from the dropdown, then click a widget to select it in the source-backed property tree.
+- **Widget Tree:** browse widgets/layouts; edit supported literal constructor text, fixed dimensions, minimum/maximum dimensions, spacing, margins, placeholders, splitter values and `setText` calls.
+- **Source Changes:** review changes against the original as a unified diff, then **Save as copy...** or discard.
+
+The Layout Explorer reconstructs recognizable `addWidget`, `addLayout`, `addTab`, splitter and layout-ownership calls. It uses **placeholder widgets, never executes the imported module, and never accesses imported databases or network APIs**. Complex code (loops, conditional layout construction, dynamic UI factories, custom painting, external widget libraries, runtime data) is **not reliably reproduced**. Layout-managed widgets are selected and edited via their supported properties; drag-to-reorder and pixel-based moves are **not supported** yet. Free drag/resize still works in the existing new-design canvas.
+
+Try methods `MainWindow._library`, `ImageViewer.__init__`, `MainWindow._build` in the test ImageScraper source. Custom widgets are shown as placeholders. Some methods rely on other builders, so their preview may be incomplete or show additional loose widgets.
+
+To test:
+
+```powershell
+git pull origin main
+python -m unittest discover -s tests -p "test_*.py"
+python main.py
+```
+
 ## Constraints and next engineering milestones
 
 - **Fixed positioning only** in MVP; later support managed layouts with margins, spacing and stretch factors.
@@ -74,6 +95,7 @@ PySide6-Director/
   main.py
   python_importer.py
   visual_preview.py
+  layout_explorer.py
   requirements.txt
   README.md
   .gitignore
