@@ -173,7 +173,7 @@ def patch_library_split_sizes(source, first, second):
 class ImportInspector(QDialog):
     def __init__(self, parent=None, path=None):
         super().__init__(parent)
-        self.setWindowTitle("Python UI Import — v0.2 (static inspector)")
+        self.setWindowTitle("Python UI Import — v0.3 (visual preview + static editor)")
         self.resize(1190, 770)
         self.path = None
         self.original = ""
