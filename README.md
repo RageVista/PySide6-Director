@@ -39,6 +39,25 @@ Choose **Import → Inspect existing Python UI...** or press **Ctrl+I** to open 
 
 **Current limits:** This is a structural/code inspector, not a pixel-perfect rendered preview of imported scripts. Widget dragging in the original fixed-position canvas remains for *new* designs only. Existing QLayouts require rules-based restructuring rather than absolute positioning. This version intentionally makes no claims about safely round-tripping arbitrary Python or resolving source dependencies.
 
+## v0.3 — ImageScraper visual preview and source editing
+
+Use **Import → Inspect existing Python UI... (Ctrl+I)** and open `tests/ImageScraper/gui.py`.
+
+The inspector now has **Visual Designer**, **Widget Tree**, and **Source Changes** tabs.
+
+1. The **Visual Designer** renders a safe Qt approximation of the ImageScraper Actress Library page. The imported script is parsed statically, never imported or executed; no database, networking or scraping occurs.
+2. **Drag the divider** between the actress table and the preview area. The displayed pane sizes update while dragging.
+3. Select **Apply splitter sizes to source**. Director modifies only `MainWindow._library`'s two literal values in `split.setSizes([450,730])` and switches to **Source Changes** for a unified diff.
+4. Select **Save as copy...** to export `gui_director_edit.py`. The original `gui.py` remains untouched. Alternatively choose **Discard edits** to reset.
+
+**Scope:** This preview deliberately reconstructs one known test page, not arbitrary imported Python. The preview is visually approximate, using placeholder data and Qt native layout widgets. It does **not** yet support drag-to-move arbitrary imported widgets, live binding to application data, user stylesheets, or automatic source rewrites beyond supported literal edits. For other scripts, the Visual Designer tab is disabled unless the known splitter pattern is found.
+
+Regression tests:
+
+```powershell
+python -m unittest discover -s tests -p "test_*.py"
+```
+
 ## Constraints and next engineering milestones
 
 - **Fixed positioning only** in MVP; later support managed layouts with margins, spacing and stretch factors.
@@ -54,6 +73,7 @@ Choose **Import → Inspect existing Python UI...** or press **Ctrl+I** to open 
 PySide6-Director/
   main.py
   python_importer.py
+  visual_preview.py
   requirements.txt
   README.md
   .gitignore
