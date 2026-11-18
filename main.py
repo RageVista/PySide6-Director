@@ -94,7 +94,7 @@ class DesignItem(QWidget):
 class Director(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('PySide6 Director — MVP')
+        self.setWindowTitle('PySide6 Director — v0.3')
         self.resize(1380, 850)
         self.path = None
         self.items = []
