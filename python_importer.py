@@ -1,0 +1,294 @@
+"""Safe, static AST inspector for existing PySide6 Python code.
+
+This deliberately NEVER imports or executes a target Python module.
+The v0.2 importer supports a subset of literal-property edits; it does not
+promise pixel-perfect rendering or arbitrary Python source round-tripping.
+"""
+import ast
+import difflib
+from dataclasses import dataclass
+from pathlib import Path
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QDialog, QWidget, QHBoxLayout, QVBoxLayout, QTreeWidget, QTreeWidgetItem,
+    QLabel, QLineEdit, QPlainTextEdit, QPushButton, QFileDialog, QMessageBox,
+    QSplitter, QComboBox
+)
+
+WIDGET_CLASSES = {
+    "QWidget", "QMainWindow", "QLabel", "QPushButton", "QLineEdit",
+    "QPlainTextEdit", "QTextEdit", "QTableWidget", "QTableView",
+    "QListWidget", "QTabWidget", "QStackedWidget", "QSplitter", "QFrame",
+    "QGroupBox", "QCheckBox", "QComboBox", "QProgressBar", "QScrollArea"
+}
+LAYOUT_CLASSES = {"QVBoxLayout", "QHBoxLayout", "QGridLayout", "QFormLayout"}
+EDITABLE_CALLS = {
+    "setFixedWidth": ("Width", 0), "setFixedHeight": ("Height", 0),
+    "setMinimumWidth": ("Minimum width", 0), "setMinimumHeight": ("Minimum height", 0),
+    "setMaximumWidth": ("Maximum width", 0), "setMaximumHeight": ("Maximum height", 0),
+    "setSpacing": ("Spacing", 0), "setText": ("Text", 0),
+    "setPlaceholderText": ("Placeholder", 0), "setWindowTitle": ("Window title", 0)
+}
+
+@dataclass
+class Element:
+    key: str
+    cls: str
+    section: str
+    line: int
+    methods: list
+
+def dotted(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = dotted(node.value)
+        return f"{base}.{node.attr}" if base else ""
+    return ""
+
+def literal(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, (str, int)):
+        return node.value
+    return None
+
+def analyze(source):
+    """Return widgets/layouts and editable literal calls, without execution."""
+    tree = ast.parse(source)
+    result = []
+    for cl in (n for n in tree.body if isinstance(n, ast.ClassDef)):
+        for method in (n for n in cl.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
+            namespace = f"{cl.name}.{method.name}"
+            registry = {}
+            items = []
+            # Only treat direct or nested constructor assignments as declarations.
+            for node in ast.walk(method):
+                if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    continue
+                val = node.value
+                if not isinstance(val, ast.Call):
+                    continue
+                kind = dotted(val.func).split(".")[-1]
+                if kind not in WIDGET_CLASSES | LAYOUT_CLASSES:
+                    continue
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    name = dotted(target)
+                    if not name or name in registry:
+                        continue
+                    item = Element(name, kind, namespace, node.lineno, [])
+                    registry[name] = item
+                    items.append(item)
+            # Extract methods called on known instance names.
+            for node in ast.walk(method):
+                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                    continue
+                recv = dotted(node.func.value)
+                item = registry.get(recv)
+                if item is None:
+                    continue
+                action = node.func.attr
+                if action in EDITABLE_CALLS and node.args:
+                    title, index = EDITABLE_CALLS[action]
+                    if len(node.args) > index and literal(node.args[index]) is not None:
+                        item.methods.append((title, node.args[index], action))
+                if action == "setContentsMargins" and len(node.args) == 4:
+                    if all(isinstance(arg, ast.Constant) and type(arg.value) is int for arg in node.args):
+                        for i, lbl in enumerate(("Margin left", "Margin top", "Margin right", "Margin bottom")):
+                            item.methods.append((lbl, node.args[i], action))
+                if action == "setSizes" and len(node.args) == 1 and isinstance(node.args[0], ast.List):
+                    for i, value in enumerate(node.args[0].elts):
+                        if type(literal(value)) is int:
+                            item.methods.append((f"Splitter size {i+1}", value, action))
+            result.extend(items)
+    return result
+
+def replace_literal(source, node, new_value):
+    """Replace only the exact AST constant span; preserve all other bytes."""
+    old = literal(node)
+    if type(old) not in (str, int):
+        raise ValueError("Unsupported expression")
+    if type(old) is int:
+        value = int(new_value)
+        if value < 0 or value > 20000:
+            raise ValueError("Numeric property must be 0–20000")
+    else:
+        value = str(new_value)
+    lines = source.splitlines(keepends=True)
+    if node.lineno != node.end_lineno:
+        raise ValueError("Multiline constant edits are not supported")
+    before = "".join(lines[:node.lineno-1])
+    start = len(before) + node.col_offset
+    end = len(before) + node.end_col_offset
+    # AST byte offsets are UTF-8 based (Python source can include unicode).
+    raw = source.encode("utf-8")
+    start = len("".join(lines[:node.lineno-1]).encode("utf-8")) + node.col_offset
+    end = len("".join(lines[:node.lineno-1]).encode("utf-8")) + node.end_col_offset
+    return (raw[:start] + repr(value).encode("utf-8") + raw[end:]).decode("utf-8")
+
+class ImportInspector(QDialog):
+    def __init__(self, parent=None, path=None):
+        super().__init__(parent)
+        self.setWindowTitle("Python UI Import — v0.2 (static inspector)")
+        self.resize(1190, 770)
+        self.path = None
+        self.original = ""
+        self.source = ""
+        self.elements = []
+        self.current = None
+        self.current_property = None
+        outer = QVBoxLayout(self)
+        top = QHBoxLayout()
+        self.file_label = QLabel("No file open")
+        open_btn = QPushButton("Open Python file...")
+        open_btn.clicked.connect(self.choose)
+        top.addWidget(open_btn)
+        top.addWidget(self.file_label, 1)
+        outer.addLayout(top)
+        warning = QLabel("Static analysis only — target scripts are NOT executed. v0.2 edits supported source literals, not widget drag-and-drop.")
+        warning.setWordWrap(True)
+        outer.addWidget(warning)
+        split = QSplitter()
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["Widget / Layout", "Type", "Line"])
+        self.tree.setColumnWidth(0, 280)
+        self.tree.currentItemChanged.connect(self.inspect)
+        split.addWidget(self.tree)
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        self.location = QLabel("Select an item to inspect its editable properties.")
+        right_layout.addWidget(self.location)
+        self.props = QComboBox()
+        self.props.currentIndexChanged.connect(self.show_property)
+        right_layout.addWidget(self.props)
+        self.value = QLineEdit()
+        right_layout.addWidget(self.value)
+        apply_btn = QPushButton("Apply property change (in memory)")
+        apply_btn.clicked.connect(self.apply_change)
+        right_layout.addWidget(apply_btn)
+        right_layout.addWidget(QLabel("Proposed source changes (unified diff):"))
+        self.diff = QPlainTextEdit()
+        self.diff.setReadOnly(True)
+        right_layout.addWidget(self.diff, 1)
+        split.addWidget(right)
+        split.setSizes([470, 650])
+        outer.addWidget(split, 1)
+        bottom = QHBoxLayout()
+        self.count = QLabel()
+        bottom.addWidget(self.count, 1)
+        reset = QPushButton("Discard edits")
+        reset.clicked.connect(self.reset)
+        save = QPushButton("Save as copy...")
+        save.clicked.connect(self.save_copy)
+        bottom.addWidget(reset)
+        bottom.addWidget(save)
+        outer.addLayout(bottom)
+        if path:
+            self.load(path)
+
+    def choose(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Open existing PySide6 source", "", "Python files (*.py)")
+        if path:
+            self.load(path)
+
+    def load(self, path):
+        try:
+            source = Path(path).read_text(encoding="utf-8-sig")
+            ast.parse(source)
+        except (OSError, UnicodeError, SyntaxError) as exc:
+            QMessageBox.warning(self, "Import failed", str(exc))
+            return
+        self.path = Path(path)
+        self.original = source
+        self.source = source
+        self.file_label.setText(str(self.path))
+        self.reload_view()
+
+    def reload_view(self, selected_key=None):
+        self.elements = analyze(self.source)
+        self.tree.blockSignals(True)
+        self.tree.clear()
+        sections = {}
+        selected = None
+        for element in self.elements:
+            section = sections.get(element.section)
+            if section is None:
+                section = QTreeWidgetItem([element.section, "Method", ""])
+                sections[element.section] = section
+                self.tree.addTopLevelItem(section)
+            item = QTreeWidgetItem([element.key, element.cls, str(element.line)])
+            item.setData(0, Qt.ItemDataRole.UserRole, element)
+            section.addChild(item)
+            if (element.section, element.key) == selected_key:
+                selected = item
+        self.tree.expandAll()
+        self.tree.blockSignals(False)
+        self.count.setText(f"{len(self.elements)} declared widgets/layouts, {sum(len(e.methods) for e in self.elements)} editable literal properties")
+        self.update_diff()
+        self.tree.setCurrentItem(selected)
+
+    def inspect(self, item, _previous):
+        self.current = item.data(0, Qt.ItemDataRole.UserRole) if item else None
+        self.props.blockSignals(True)
+        self.props.clear()
+        if self.current:
+            e = self.current
+            self.location.setText(f"{e.section}  •  {e.key}: {e.cls}  •  line {e.line}")
+            for label, node, action in e.methods:
+                self.props.addItem(f"{label}  (line {node.lineno})", (label, node, action))
+        else:
+            self.location.setText("Select a widget or layout to inspect.")
+        self.props.blockSignals(False)
+        self.show_property(self.props.currentIndex())
+
+    def show_property(self, index):
+        entry = self.props.itemData(index) if index >= 0 else None
+        self.current_property = entry
+        self.value.setEnabled(entry is not None)
+        self.value.setText(str(literal(entry[1])) if entry else "")
+
+    def apply_change(self):
+        if not self.current or not self.current_property:
+            return
+        label, node, _ = self.current_property
+        selected_key = (self.current.section, self.current.key)
+        try:
+            updated = replace_literal(self.source, node, self.value.text())
+            ast.parse(updated)
+        except (ValueError, SyntaxError, UnicodeError) as exc:
+            QMessageBox.warning(self, "Property edit failed", str(exc))
+            return
+        self.source = updated
+        self.reload_view(selected_key)
+
+    def update_diff(self):
+        diff = difflib.unified_diff(
+            self.original.splitlines(), self.source.splitlines(),
+            fromfile=str(self.path) + " (original)" if self.path else "original",
+            tofile="modified copy", lineterm=""
+        )
+        value = "\n".join(diff)
+        self.diff.setPlainText(value if value else "No pending changes")
+
+    def reset(self):
+        self.source = self.original
+        self.reload_view()
+
+    def save_copy(self):
+        if self.path is None:
+            return
+        suggested = self.path.with_name(self.path.stem + "_director_edit.py")
+        path, _ = QFileDialog.getSaveFileName(self, "Save edited Python as copy", str(suggested), "Python files (*.py)")
+        if not path:
+            return
+        destination = Path(path)
+        if destination.resolve() == self.path.resolve():
+            QMessageBox.warning(self, "Original protected", "Choose a different filename. v0.2 never overwrites the source.")
+            return
+        try:
+            ast.parse(self.source)
+            destination.write_text(self.source, encoding="utf-8")
+        except (OSError, UnicodeError, SyntaxError) as exc:
+            QMessageBox.warning(self, "Save failed", str(exc))
+            return
+        QMessageBox.information(self, "Saved", f"Edited copy saved to:\n{destination}")
