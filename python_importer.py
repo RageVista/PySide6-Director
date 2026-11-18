@@ -92,6 +92,10 @@ def analyze(source):
                     if not name or name in registry:
                         continue
                     item = Element(name, kind, namespace, node.lineno, [])
+                    # Qt text is often passed directly to the constructor, not setText().
+                    if kind in {"QLabel", "QPushButton", "QCheckBox", "QGroupBox"} and val.args:
+                        if type(literal(val.args[0])) is str:
+                            item.methods.append(("Constructor text", val.args[0], "constructor"))
                     registry[name] = item
                     items.append(item)
             # Extract methods called on known instance names.
