@@ -13,8 +13,9 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog, QWidget, QHBoxLayout, QVBoxLayout, QTreeWidget, QTreeWidgetItem,
     QLabel, QLineEdit, QPlainTextEdit, QPushButton, QFileDialog, QMessageBox,
-    QSplitter, QComboBox
+    QSplitter, QComboBox, QTabWidget, QScrollArea
 )
+from visual_preview import ImageScraperLibraryPreview
 
 WIDGET_CLASSES = {
     "QWidget", "QMainWindow", "QLabel", "QPushButton", "QLineEdit",
@@ -139,6 +140,36 @@ def replace_literal(source, node, new_value):
     end = len("".join(lines[:node.lineno-1]).encode("utf-8")) + node.end_col_offset
     return (raw[:start] + repr(value).encode("utf-8") + raw[end:]).decode("utf-8")
 
+def library_split_sizes(source):
+    """Read literal splitter sizes from ImageScraper's _library, without executing."""
+    split = next((e for e in analyze(source) if e.section == "MainWindow._library" and e.key == "split" and e.cls == "QSplitter"), None)
+    if split is None:
+        return None
+    values = {label: literal(node) for label, node, _ in split.methods if label.startswith("Splitter size ")}
+    if type(values.get("Splitter size 1")) is not int or type(values.get("Splitter size 2")) is not int:
+        return None
+    return values["Splitter size 1"], values["Splitter size 2"]
+
+
+def patch_library_split_sizes(source, first, second):
+    """Change only the supported QSplitter.setSizes integer literals."""
+    first, second = int(first), int(second)
+    if min(first, second) < 1:
+        raise ValueError("Both splitter panes must have positive sizes")
+    split = next((e for e in analyze(source) if e.section == "MainWindow._library" and e.key == "split" and e.cls == "QSplitter"), None)
+    if split is None:
+        raise ValueError("No supported MainWindow._library splitter found")
+    nodes = {label: node for label, node, _ in split.methods if label.startswith("Splitter size ")}
+    if "Splitter size 1" not in nodes or "Splitter size 2" not in nodes:
+        raise ValueError("Splitter sizes are not literal integers")
+    edits = [(nodes["Splitter size 1"], first), (nodes["Splitter size 2"], second)]
+    # Apply right-to-left, retaining valid offsets of earlier AST nodes.
+    for node, value in sorted(edits, key=lambda pair: (pair[0].lineno, pair[0].col_offset), reverse=True):
+        source = replace_literal(source, node, str(value))
+    ast.parse(source)
+    return source
+
+
 class ImportInspector(QDialog):
     def __init__(self, parent=None, path=None):
         super().__init__(parent)
@@ -185,7 +216,39 @@ class ImportInspector(QDialog):
         right_layout.addWidget(self.diff, 1)
         split.addWidget(right)
         split.setSizes([470, 650])
-        outer.addWidget(split, 1)
+        # Visual replica, source tree and diff in separate tabs.
+        self.tabs = QTabWidget()
+        visual_page = QWidget()
+        visual_layout = QVBoxLayout(visual_page)
+        visual_info = QLabel(
+            "ImageScraper Actress Library (safe replica). Drag the divider then Apply. "
+            "No imported source, database or scraper code is executed."
+        )
+        visual_info.setWordWrap(True)
+        visual_layout.addWidget(visual_info)
+        self.visual = ImageScraperLibraryPreview()
+        self.visual.splitterChanged.connect(self.on_visual_splitter_moved)
+        visual_scroll = QScrollArea()
+        visual_scroll.setWidgetResizable(True)
+        visual_scroll.setWidget(self.visual)
+        visual_layout.addWidget(visual_scroll, 1)
+        controls = QHBoxLayout()
+        self.split_status = QLabel("Drag the splitter divider to change the table/gallery ratio.")
+        controls.addWidget(self.split_status, 1)
+        self.apply_split_button = QPushButton("Apply splitter sizes to source")
+        self.apply_split_button.clicked.connect(self.apply_visual_split)
+        controls.addWidget(self.apply_split_button)
+        visual_layout.addLayout(controls)
+        self.tabs.addTab(visual_page, "Visual Designer")
+        self.tabs.addTab(split, "Widget Tree")
+        diff_page = QWidget()
+        diff_layout = QVBoxLayout(diff_page)
+        right_layout.removeWidget(self.diff)
+        self.diff.setParent(diff_page)
+        diff_layout.addWidget(QLabel("Unified diff: original versus modified Python source"))
+        diff_layout.addWidget(self.diff, 1)
+        self.tabs.addTab(diff_page, "Source Changes")
+        outer.addWidget(self.tabs, 1)
         bottom = QHBoxLayout()
         self.count = QLabel()
         bottom.addWidget(self.count, 1)
@@ -238,7 +301,33 @@ class ImportInspector(QDialog):
         self.tree.blockSignals(False)
         self.count.setText(f"{len(self.elements)} declared widgets/layouts, {sum(len(e.methods) for e in self.elements)} editable literal properties")
         self.update_diff()
+        sizes = library_split_sizes(self.source)
+        supported = sizes is not None
+        self.tabs.setTabEnabled(0, supported)
+        self.apply_split_button.setEnabled(supported)
+        if supported:
+            self.visual.set_split_sizes(sizes)
+            self.split_status.setText(f"Source splitter sizes: {sizes[0]} / {sizes[1]} — drag divider to change")
+        elif self.tabs.currentIndex() == 0:
+            self.tabs.setCurrentIndex(1)
         self.tree.setCurrentItem(selected)
+
+    def on_visual_splitter_moved(self, left, right):
+        self.split_status.setText(f"Preview sizes: {left} / {right} — click Apply to update Python")
+        self.apply_split_button.setEnabled(True)
+
+    def apply_visual_split(self):
+        if library_split_sizes(self.source) is None:
+            QMessageBox.warning(self, "Unsupported layout", "No editable ImageScraper splitter found.")
+            return
+        left, right = self.visual.current_split_sizes()
+        try:
+            self.source = patch_library_split_sizes(self.source, left, right)
+        except (ValueError, SyntaxError) as exc:
+            QMessageBox.warning(self, "Unable to edit splitter", str(exc))
+            return
+        self.reload_view()
+        self.tabs.setCurrentIndex(2)
 
     def inspect(self, item, _previous):
         self.current = item.data(0, Qt.ItemDataRole.UserRole) if item else None
