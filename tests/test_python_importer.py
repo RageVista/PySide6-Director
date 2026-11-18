@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from python_importer import analyze, replace_literal, library_split_sizes, patch_library_split_sizes
+from layout_explorer import class_methods
 
 
 class ImporterTests(unittest.TestCase):
@@ -67,6 +68,23 @@ class Window:
         node = box.methods[0][1]
         with self.assertRaises(ValueError):
             replace_literal(source, node, "not a number")
+
+    def test_generic_layout_explorer_discovers_source_methods(self):
+        source = (ROOT / "tests" / "ImageScraper" / "gui.py").read_text(encoding="utf-8")
+        methods = class_methods(source)
+        self.assertIn("MainWindow._library", methods)
+        self.assertIn("ImageViewer.__init__", methods)
+        self.assertNotIn("ScrapeWorker.run_nonexistent", methods)
+
+    def test_edit_literal_constructor_text_preserves_source(self):
+        source = "class Win:\n def build(self):\n  title = QLabel('Old title')\n  button = QPushButton('Refresh')\n"
+        elements = analyze(source)
+        title = next(item for item in elements if item.key == "title")
+        node = next(node for name, node, _ in title.methods if name == "Constructor text")
+        changed = replace_literal(source, node, "New title")
+        self.assertIn("QLabel('New title')", changed)
+        self.assertIn("QPushButton('Refresh')", changed)
+        ast.parse(changed)
 
     def test_imagescraper_visual_splitter_round_trip(self):
         source = (ROOT / "tests" / "ImageScraper" / "gui.py").read_text(encoding="utf-8")
