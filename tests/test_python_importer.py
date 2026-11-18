@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from python_importer import analyze, replace_literal
+from python_importer import analyze, replace_literal, library_split_sizes, patch_library_split_sizes
 
 
 class ImporterTests(unittest.TestCase):
@@ -67,6 +67,22 @@ class Window:
         node = box.methods[0][1]
         with self.assertRaises(ValueError):
             replace_literal(source, node, "not a number")
+
+    def test_imagescraper_visual_splitter_round_trip(self):
+        source = (ROOT / "tests" / "ImageScraper" / "gui.py").read_text(encoding="utf-8")
+        self.assertEqual(library_split_sizes(source), (450, 730))
+        updated = patch_library_split_sizes(source, 360, 820)
+        self.assertEqual(library_split_sizes(updated), (360, 820))
+        self.assertIn("split.setSizes([360,820])", updated)
+        self.assertIn("split.setSizes([450,730])", source)
+        ast.parse(updated)
+        self.assertEqual(updated.replace("split.setSizes([360,820])", "split.setSizes([450,730])"), source)
+
+    def test_visual_splitter_rejects_unsupported_layout(self):
+        source = "class Example:\n def build(self):\n  split = QSplitter()\n  split.setSizes([3,4])\n"
+        self.assertIsNone(library_split_sizes(source))
+        with self.assertRaises(ValueError):
+            patch_library_split_sizes(source, 100, 200)
 
     def test_splitter_sizes_edit(self):
         source = "class W:\n def page(self):\n  split = QSplitter()\n  split.setSizes([450,730])\n"
