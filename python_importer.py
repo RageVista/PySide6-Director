@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QSplitter, QComboBox, QTabWidget, QScrollArea
 )
 from visual_preview import ImageScraperLibraryPreview
+from layout_explorer import StaticLayoutExplorer, class_methods
 
 WIDGET_CLASSES = {
     "QWidget", "QMainWindow", "QLabel", "QPushButton", "QLineEdit",
@@ -240,6 +241,28 @@ class ImportInspector(QDialog):
         controls.addWidget(self.apply_split_button)
         visual_layout.addLayout(controls)
         self.tabs.addTab(visual_page, "Visual Designer")
+        explorer_page = QWidget()
+        explorer_layout = QVBoxLayout(explorer_page)
+        explorer_controls = QHBoxLayout()
+        explorer_controls.addWidget(QLabel("Source method:"))
+        self.method_picker = QComboBox()
+        self.method_picker.currentTextChanged.connect(self.show_method_preview)
+        explorer_controls.addWidget(self.method_picker, 1)
+        explorer_layout.addLayout(explorer_controls)
+        explorer_help = QLabel(
+            "Static layout approximation — click an item to select its declaration. "
+            "Edit supported properties in Widget Tree. Dragging arbitrary layout-managed "
+            "widgets is not yet supported."
+        )
+        explorer_help.setWordWrap(True)
+        explorer_layout.addWidget(explorer_help)
+        self.explorer = StaticLayoutExplorer()
+        self.explorer.widgetSelected.connect(self.select_source_widget)
+        explorer_scroll = QScrollArea()
+        explorer_scroll.setWidgetResizable(True)
+        explorer_scroll.setWidget(self.explorer)
+        explorer_layout.addWidget(explorer_scroll, 1)
+        self.tabs.addTab(explorer_page, "Layout Explorer")
         self.tabs.addTab(split, "Widget Tree")
         diff_page = QWidget()
         diff_layout = QVBoxLayout(diff_page)
@@ -299,6 +322,17 @@ class ImportInspector(QDialog):
                 selected = item
         self.tree.expandAll()
         self.tree.blockSignals(False)
+        previous = self.method_picker.currentText()
+        self.method_picker.blockSignals(True)
+        self.method_picker.clear()
+        names = list(class_methods(self.source))
+        self.method_picker.addItems([section for section in names if any(e.section == section for e in self.elements)])
+        if previous in [self.method_picker.itemText(i) for i in range(self.method_picker.count())]:
+            self.method_picker.setCurrentText(previous)
+        elif "MainWindow._library" in names:
+            self.method_picker.setCurrentText("MainWindow._library")
+        self.method_picker.blockSignals(False)
+        self.show_method_preview(self.method_picker.currentText())
         self.count.setText(f"{len(self.elements)} declared widgets/layouts, {sum(len(e.methods) for e in self.elements)} editable literal properties")
         self.update_diff()
         sizes = library_split_sizes(self.source)
@@ -311,6 +345,25 @@ class ImportInspector(QDialog):
         elif self.tabs.currentIndex() == 0:
             self.tabs.setCurrentIndex(1)
         self.tree.setCurrentItem(selected)
+
+    def show_method_preview(self, method):
+        if method:
+            try:
+                self.explorer.render(self.source, method, self.elements)
+            except (TypeError, ValueError, RuntimeError) as exc:
+                self.split_status.setText(f"Layout Explorer: unsupported source construct ({exc})")
+
+    def select_source_widget(self, section, key):
+        for i in range(self.tree.topLevelItemCount()):
+            group = self.tree.topLevelItem(i)
+            if group.text(0) != section:
+                continue
+            for j in range(group.childCount()):
+                item = group.child(j)
+                if item.text(0) == key:
+                    self.tree.setCurrentItem(item)
+                    self.tabs.setCurrentIndex(2)
+                    return
 
     def on_visual_splitter_moved(self, left, right):
         self.split_status.setText(f"Preview sizes: {left} / {right} — click Apply to update Python")
@@ -327,7 +380,7 @@ class ImportInspector(QDialog):
             QMessageBox.warning(self, "Unable to edit splitter", str(exc))
             return
         self.reload_view()
-        self.tabs.setCurrentIndex(2)
+        self.tabs.setCurrentIndex(3)
 
     def inspect(self, item, _previous):
         self.current = item.data(0, Qt.ItemDataRole.UserRole) if item else None
