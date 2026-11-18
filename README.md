@@ -25,6 +25,20 @@ A standalone PySide6 visual editor for **new, absolute-positioned UI designs**. 
 - **F5** shows a runtime preview with interactive controls.
 - **Ctrl+E** exports a standalone runnable `.py` file (e.g., `generated_ui.py`). Run it with `python generated_ui.py`.
 
+
+## v0.2 — Inspect existing Python UIs (static, safe)
+
+Choose **Import → Inspect existing Python UI...** or press **Ctrl+I** to open the new inspector. Open `tests/ImageScraper/gui.py` as the first test.
+
+- Detects declared PySide6 widgets and layouts, grouped under their containing class/method.
+- Select an item to inspect supported literal properties such as fixed width, height, margins, spacing, text, placeholders and splitter sizes.
+- Edit one property and select **Apply property change (in memory)** to display a unified source diff.
+- Choose **Save as copy...** to write a modified `.py` file. The original is protected. No target module is imported or executed.
+- **Discard edits** resets the in-memory copy to the source loaded from disk.
+- Run parser regression tests: `python -m unittest discover -s tests -p "test_*.py"`.
+
+**Current limits:** This is a structural/code inspector, not a pixel-perfect rendered preview of imported scripts. Widget dragging in the original fixed-position canvas remains for *new* designs only. Existing QLayouts require rules-based restructuring rather than absolute positioning. This version intentionally makes no claims about safely round-tripping arbitrary Python or resolving source dependencies.
+
 ## Constraints and next engineering milestones
 
 - **Fixed positioning only** in MVP; later support managed layouts with margins, spacing and stretch factors.
@@ -39,7 +53,13 @@ A standalone PySide6 visual editor for **new, absolute-positioned UI designs**. 
 ```text
 PySide6-Director/
   main.py
+  python_importer.py
   requirements.txt
   README.md
   .gitignore
+  tests/
+    test_python_importer.py
+    ImageScraper/
+      gui.py
+      README.md
 ```
