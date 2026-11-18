@@ -30,6 +30,22 @@ class ImporterTests(unittest.TestCase):
         self.assertGreater(len(elements), 40)
         # The test imports only python_importer, never the user's ImageScraper module.
 
+    def test_custom_widget_subclasses(self):
+        source = """class BasePanel(QWidget):
+    pass
+class ImageViewer(BasePanel):
+    pass
+class ScrapeWorker(QRunnable):
+    pass
+class Window:
+    def build(self):
+        self.viewer = ImageViewer()
+        self.worker = ScrapeWorker()
+"""
+        elements = analyze(source)
+        self.assertIn(("Window.build", "self.viewer"), {(e.section, e.key) for e in elements})
+        self.assertNotIn(("Window.build", "self.worker"), {(e.section, e.key) for e in elements})
+
     def test_literal_patch_preserves_surrounding_code(self):
         source = '''class Window:
     def _build(self):
