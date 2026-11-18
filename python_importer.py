@@ -56,7 +56,20 @@ def analyze(source):
     """Return widgets/layouts and editable literal calls, without execution."""
     tree = ast.parse(source)
     result = []
-    for cl in (n for n in tree.body if isinstance(n, ast.ClassDef)):
+    # Recognize user-defined widgets through direct or indirect QWidget inheritance.
+    # Static analysis only: never import or execute the target module.
+    classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
+    widget_types = set(WIDGET_CLASSES)
+    changed = True
+    while changed:
+        changed = False
+        for name, declaration in classes.items():
+            if name not in widget_types and any(
+                dotted(base).split(".")[-1] in widget_types for base in declaration.bases
+            ):
+                widget_types.add(name)
+                changed = True
+    for cl in classes.values():
         for method in (n for n in cl.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
             namespace = f"{cl.name}.{method.name}"
             registry = {}
@@ -69,7 +82,7 @@ def analyze(source):
                 if not isinstance(val, ast.Call):
                     continue
                 kind = dotted(val.func).split(".")[-1]
-                if kind not in WIDGET_CLASSES | LAYOUT_CLASSES:
+                if kind not in widget_types | LAYOUT_CLASSES:
                     continue
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 for target in targets:
