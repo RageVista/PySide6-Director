@@ -1,6 +1,7 @@
 """PySide6 Director MVP: visual editing, JSON persistence and Python export."""
 import json
 import sys
+from python_importer import ImportInspector
 from pathlib import Path
 from PySide6.QtCore import Qt, QRect, Signal
 from PySide6.QtGui import QAction, QPixmap
@@ -134,6 +135,11 @@ class Director(QMainWindow):
             ('Save design JSON',self.save_json,'Ctrl+S'),('Export Python',self.export_python,'Ctrl+E'),
             ('Preview runtime',self.preview,'F5')]:
             a = QAction(label,self); a.setShortcut(shortcut); a.triggered.connect(handler); menu.addAction(a)
+        import_menu = self.menuBar().addMenu('Import')
+        import_action = QAction('Inspect existing Python UI...', self)
+        import_action.setShortcut('Ctrl+I')
+        import_action.triggered.connect(self.import_python)
+        import_menu.addAction(import_action)
         self.statusBar().showMessage('Ready — create widgets from toolbox; save JSON to keep editing')
         self.select_item(None)
     def select_item(self, item):
@@ -167,6 +173,10 @@ class Director(QMainWindow):
         item.inner.deleteLater(); item.inner = fresh
         item.setGeometry(item.data['x'],item.data['y'],item.data['w'],item.data['h'])
         fresh.setGeometry(0,0,item.width(),item.height()); fresh.show(); item.update()
+    def import_python(self):
+        dialog = ImportInspector(self)
+        dialog.exec()
+
     def choose_image(self):
         if not self.current: return
         path, _ = QFileDialog.getOpenFileName(self,'Choose image','','Images (*.png *.jpg *.jpeg *.webp *.bmp)')
