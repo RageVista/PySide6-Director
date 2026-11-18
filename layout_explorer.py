@@ -107,6 +107,17 @@ class StaticLayoutExplorer(QWidget):
                 widget.setToolTip(f"{element.key}: {element.cls} — click to select")
                 widget.setObjectName("staticPreview_" + element.key.replace(".", "_"))
 
+        # Literal constructor text can be shown without evaluating code.
+        for element in entries:
+            widget = self._objects.get(element.key)
+            if widget is None:
+                continue
+            for label, node, _action in element.methods:
+                if label == "Constructor text" and hasattr(widget, "setText"):
+                    widget.setText(str(scalar(node, "")))
+                elif label == "Constructor text" and isinstance(widget, QGroupBox):
+                    widget.setTitle(str(scalar(node, "")))
+
         # Constructors with a QWidget argument establish layout ownership,
         # for example: dl = QVBoxLayout(detail).
         owner_of = {}
